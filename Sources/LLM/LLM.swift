@@ -1393,6 +1393,30 @@ open class LLM: ObservableObject {
         self.preprocess = template.preprocess
         self.template = template
     }
+
+    public func resolvedTemplate(
+        systemPrompt: String? = nil,
+        overriding explicitTemplate: Template? = nil,
+        modelName: String? = nil
+    ) -> Template {
+        TemplateResolver.resolve(
+            systemPrompt: systemPrompt,
+            explicitTemplate: explicitTemplate,
+            context: templateResolutionContext(modelName: modelName)
+        )
+    }
+
+    public func useResolvedTemplate(
+        systemPrompt: String? = nil,
+        overriding explicitTemplate: Template? = nil,
+        modelName: String? = nil
+    ) {
+        template = resolvedTemplate(
+            systemPrompt: systemPrompt,
+            overriding: explicitTemplate,
+            modelName: modelName
+        )
+    }
     
     public convenience init?(
         from huggingFaceModel: HuggingFaceModel,
@@ -1412,9 +1436,10 @@ open class LLM: ObservableObject {
         let url = try await huggingFaceModel.download(to: url, as: name) { progress in
             Task { @MainActor in updateProgress(progress) }
         }
+        let template = huggingFaceModel.resolveTemplate()
         self.init(
             from: url,
-            template: huggingFaceModel.template,
+            template: template,
             history: history,
             seed: seed,
             topK: topK,
@@ -1425,7 +1450,7 @@ open class LLM: ObservableObject {
             historyLimit: historyLimit,
             maxTokenCount: maxTokenCount
         )
-        await setupThinkingTokens(from: huggingFaceModel.template)
+        await setupThinkingTokens(from: template)
     }
     
     private func setupThinkingTokens(from template: Template?) async {
@@ -1442,6 +1467,39 @@ open class LLM: ObservableObject {
             return (await core.encode(text, shouldAddBOS: false, special: false), text)
         case .token(let token):
             return ([token], await core.decode(token, special: true))
+        }
+    }
+
+    private func templateResolutionContext(modelName: String? = nil) -> TemplateResolutionContext {
+        let currentPath = String(cString: path)
+        return TemplateResolutionContext(
+            modelName: modelName,
+            fileName: URL(fileURLWithPath: currentPath).lastPathComponent,
+            metadata: [
+                "general.architecture": modelMetadataValue(for: "general.architecture"),
+                "general.name": modelMetadataValue(for: "general.name")
+            ].compactMapValues { $0 },
+            chatTemplateHint: nil
+        )
+    }
+
+    private func modelMetadataValue(for key: String) -> String? {
+        var bufferSize = 256
+
+        while true {
+            var buffer = [CChar](repeating: 0, count: bufferSize)
+            let written = key.withCString { keyPointer in
+                llama_model_meta_val_str(model, keyPointer, &buffer, buffer.count)
+            }
+
+            if written < 0 {
+                return nil
+            }
+            if written < buffer.count {
+                return String(cString: buffer)
+            }
+
+            bufferSize = Int(written) + 1
         }
     }
     
@@ -1630,6 +1688,130 @@ extension TokenSequence: ExpressibleByIntegerLiteral {
     }
 }
 
+enum TemplateFamily: Sendable, Equatable {
+    case chatML
+    case qwen
+    case alpaca
+    case llama
+    case mistral
+    case gemma
+
+    func makeTemplate(systemPrompt: String?) -> Template {
+        switch self {
+        case .chatML:
+            return .chatML(systemPrompt)
+        case .qwen:
+            return .qwen(systemPrompt)
+        case .alpaca:
+            return .alpaca(systemPrompt)
+        case .llama:
+            return .llama(systemPrompt)
+        case .mistral:
+            return .mistral
+        case .gemma:
+            return .gemma
+        }
+    }
+}
+
+struct TemplateResolutionContext: Sendable {
+    var modelName: String?
+    var fileName: String?
+    var metadata: [String: String] = [:]
+    var chatTemplateHint: String?
+}
+
+enum TemplateResolver {
+    static func resolve(
+        systemPrompt: String? = nil,
+        explicitTemplate: Template? = nil,
+        context: TemplateResolutionContext
+    ) -> Template {
+        if let explicitTemplate {
+            return explicitTemplate
+        }
+
+        let family = inferFamily(from: context) ?? .chatML
+        return family.makeTemplate(systemPrompt: systemPrompt)
+    }
+
+    static func inferFamily(from context: TemplateResolutionContext) -> TemplateFamily? {
+        if let family = inferFamily(fromChatTemplateHint: context.chatTemplateHint) {
+            return family
+        }
+
+        for key in ["general.architecture", "general.name"] {
+            if let value = context.metadata[key], let family = inferFamily(fromIdentifier: value) {
+                return family
+            }
+        }
+
+        for value in context.metadata.values {
+            if let family = inferFamily(fromIdentifier: value) {
+                return family
+            }
+        }
+
+        for identifier in [context.modelName, context.fileName] {
+            if let identifier, let family = inferFamily(fromIdentifier: identifier) {
+                return family
+            }
+        }
+
+        return nil
+    }
+
+    private static func inferFamily(fromChatTemplateHint hint: String?) -> TemplateFamily? {
+        guard let loweredHint = hint?.lowercased(), !loweredHint.isEmpty else { return nil }
+
+        if loweredHint.contains("enable_thinking") || loweredHint.contains("<think>\n") || loweredHint.contains("qwen") {
+            return .qwen
+        }
+        if loweredHint.contains("<start_of_turn>") {
+            return .gemma
+        }
+        if loweredHint.contains("[inst]") && loweredHint.contains("<<sys>>") {
+            return .llama
+        }
+        if loweredHint.contains("[inst]") {
+            return .mistral
+        }
+        if loweredHint.contains("### instruction:") {
+            return .alpaca
+        }
+        if loweredHint.contains("<|im_start|>") {
+            return .chatML
+        }
+
+        return inferFamily(fromIdentifier: loweredHint)
+    }
+
+    private static func inferFamily(fromIdentifier identifier: String) -> TemplateFamily? {
+        let loweredIdentifier = identifier.lowercased()
+
+        if loweredIdentifier.contains("qwen") {
+            return .qwen
+        }
+        if loweredIdentifier.contains("gemma") {
+            return .gemma
+        }
+        if loweredIdentifier.contains("mistral") {
+            return .mistral
+        }
+        if loweredIdentifier.contains("alpaca") {
+            return .alpaca
+        }
+        if loweredIdentifier.contains("tinyllama") || loweredIdentifier.contains("llama") {
+            return .llama
+        }
+        if loweredIdentifier.contains("chatml") {
+            return .chatML
+        }
+
+        return nil
+    }
+}
+
 /// A chat template for formatting conversations according to model-specific formats.
 ///
 /// Templates handle the preprocessing of user input and conversation history
@@ -1812,19 +1994,27 @@ public enum HuggingFaceError: Error {
 /// Hugging Face repositories with support for different quantization levels.
 public struct HuggingFaceModel {
     public let name: String
-    public let template: Template
+    public let template: Template?
     public let filterRegexPattern: String
     
-    public init(_ name: String, template: Template, filterRegexPattern: String) {
+    public init(_ name: String, template: Template? = nil, filterRegexPattern: String) {
         self.name = name
         self.template = template
         self.filterRegexPattern = filterRegexPattern
     }
     
-    public init(_ name: String, _ quantization: Quantization? = .Q4_K_M, template: Template) {
+    public init(_ name: String, _ quantization: Quantization? = .Q4_K_M, template: Template? = nil) {
         self.name = name
         self.template = template
         self.filterRegexPattern = quantization.map { "(?i)\($0.rawValue)" } ?? ".*"
+    }
+
+    public func resolveTemplate(systemPrompt: String? = nil, overriding explicitTemplate: Template? = nil) -> Template {
+        TemplateResolver.resolve(
+            systemPrompt: systemPrompt,
+            explicitTemplate: explicitTemplate ?? template,
+            context: TemplateResolutionContext(modelName: name)
+        )
     }
     
     package func getDownloadURLStrings() async throws -> [String] {

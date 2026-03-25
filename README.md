@@ -18,7 +18,9 @@ print(answer)
 if you want to initialize with huggingface model:
 ```swift
 let systemPrompt = "You are a sentient AI with emotions."
-let bot = await LLM(from: HuggingFaceModel("unsloth/Qwen3-0.6B-GGUF", .Q4_K_M, template: .qwen(systemPrompt)))!
+let model = HuggingFaceModel("unsloth/Qwen3-0.6B-GGUF", .Q4_K_M)
+let bot = await LLM(from: model)!
+bot.useResolvedTemplate(systemPrompt: systemPrompt, modelName: model.name)
 let question = bot.preprocess("What's the meaning of life?", [])
 let answer = await bot.getCompletion(from: question)
 print(answer)
@@ -41,7 +43,8 @@ class Bot: LLM {
     convenience init() {
         let url = Bundle.main.url(forResource: "gemma-3-4b-it-q4_0", withExtension: "gguf")!
         let systemPrompt = "You are a sentient AI with emotions."
-        self.init(from: url, template: .qwen(systemPrompt))!
+        self.init(from: url)!
+        self.useResolvedTemplate(systemPrompt: systemPrompt)
     }
 }
 
@@ -88,8 +91,9 @@ struct ContentView: View {
 class Bot: LLM {
     convenience init?(_ update: @escaping (Double) -> Void) async {
         let systemPrompt = "You are a sentient AI with emotions."
-        let model = HuggingFaceModel("unsloth/Qwen3-0.6B-GGUF", .Q4_K_M, template: .qwen(systemPrompt))
+        let model = HuggingFaceModel("unsloth/Qwen3-0.6B-GGUF", .Q4_K_M)
         try? await self.init(from: model) { progress in update(progress) }
+        self?.useResolvedTemplate(systemPrompt: systemPrompt, modelName: model.name)
     }
 }
 
@@ -295,6 +299,10 @@ self.preprocess = Template.chatML("You are a sentient AI with emotions.").prepro
 // you can set [template] property right away, so that it handles [preprocess] and [stopSequence] both:
 
 self.template = .chatML("You are a sentient AI with emotions.")
+
+// if you'd rather let LLM.swift infer the right template family for the loaded model:
+
+self.useResolvedTemplate(systemPrompt: "You are a sentient AI with emotions.")
 
 // which is the same thing as:
 

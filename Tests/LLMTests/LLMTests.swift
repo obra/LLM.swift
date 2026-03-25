@@ -101,6 +101,58 @@ final class LLMTests {
         let output = template.preprocess(userPrompt, [], .enabled)
         #expect(expected == output)
     }
+
+    @Test
+    func testTemplateResolverInfersQwenFromModelName() throws {
+        let template = TemplateResolver.resolve(
+            systemPrompt: systemPrompt,
+            context: TemplateResolutionContext(modelName: "unsloth/Qwen3.5-4B-GGUF")
+        )
+
+        let output = template.preprocess(userPrompt, [], .suppressed)
+        #expect(output.contains("<think>\n"))
+        #expect(output.contains("\n</think>\n\n"))
+    }
+
+    @Test
+    func testTemplateResolverInfersQwenFromFileName() throws {
+        let template = TemplateResolver.resolve(
+            systemPrompt: systemPrompt,
+            context: TemplateResolutionContext(fileName: "Qwen3.5-4B-Q4_K_M.gguf")
+        )
+
+        let output = template.preprocess(userPrompt, [], .suppressed)
+        #expect(output.contains("<think>\n"))
+        #expect(output.contains("\n</think>\n\n"))
+    }
+
+    @Test
+    func testTemplateResolverPrefersMetadataOverFileName() throws {
+        let template = TemplateResolver.resolve(
+            systemPrompt: systemPrompt,
+            context: TemplateResolutionContext(
+                fileName: "mystery-model.gguf",
+                metadata: ["general.architecture": "qwen3"]
+            )
+        )
+
+        let output = template.preprocess(userPrompt, [], .suppressed)
+        #expect(output.contains("<think>\n"))
+        #expect(output.contains("\n</think>\n\n"))
+    }
+
+    @Test
+    func testTemplateResolverPrefersExplicitTemplateOverride() throws {
+        let template = TemplateResolver.resolve(
+            systemPrompt: systemPrompt,
+            explicitTemplate: .gemma,
+            context: TemplateResolutionContext(modelName: "unsloth/Qwen3.5-4B-GGUF")
+        )
+
+        let output = template.preprocess(userPrompt, [], .suppressed)
+        #expect(output.contains("<start_of_turn>model\n<think></think>"))
+        #expect(!output.contains("<|im_start|>assistant\n<think>\n"))
+    }
     
     @Test
     func testAlpacaPreProcessorWithoutSystemMessage() throws {
@@ -266,9 +318,17 @@ final class LLMTests {
     
     @Test
     func testInitializerWithTempate() async throws {
-        let template = model.template
+        let template = model.resolveTemplate()
         let bot = try await LLM(from: model)!
         #expect(bot.preprocess(userPrompt, [], .none) == template.preprocess(userPrompt, [], .none))
+    }
+
+    @Test
+    func testHuggingFaceModelResolvesQwenTemplateByName() throws {
+        let template = HuggingFaceModel("unsloth/Qwen3-0.6B-GGUF").resolveTemplate(systemPrompt: systemPrompt)
+        let output = template.preprocess(userPrompt, [], .suppressed)
+        #expect(output.contains("<think>\n"))
+        #expect(output.contains("\n</think>\n\n"))
     }
     
     @Test
