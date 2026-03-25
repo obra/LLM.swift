@@ -7,6 +7,29 @@ final class LLMTests {
     let systemPrompt = "You are a human."
     let userPrompt = "Are you a human or an AI?"
     let history = [Chat(.user, "Hey."), Chat(.bot, "Hi.")]
+
+    deinit {
+        LLM.resetBackendHooksForTesting()
+    }
+
+    @Test
+    func testBackendShutdownIsIdempotent() throws {
+        var initializeCount = 0
+        var shutdownCount = 0
+
+        LLM.setBackendHooksForTesting(
+            initialize: { initializeCount += 1 },
+            shutdown: { shutdownCount += 1 }
+        )
+
+        LLM.ensureInitialized()
+        LLM.ensureInitialized()
+        LLM.shutdownBackend()
+        LLM.shutdownBackend()
+
+        #expect(initializeCount == 1)
+        #expect(shutdownCount == 1)
+    }
     
     @Test
     func testChatMLPreProcessorWithoutSystemMessage() throws {

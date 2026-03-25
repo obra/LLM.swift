@@ -1255,14 +1255,60 @@ open class LLM: ObservableObject {
     private var input: String = ""
     
     static var isLogSilenced = false
-    
-    fileprivate static func ensureInitialized() {
-        struct Initialization {
-            static let invoke: Void = {
-                llama_backend_init()
-            }()
+
+    private enum BackendLifecycle {
+        static let lock = NSLock()
+        static var isInitialized = false
+        static var initialize: () -> Void = {
+            llama_backend_init()
         }
-        _ = Initialization.invoke
+        static var shutdown: () -> Void = {
+            llama_backend_free()
+        }
+    }
+
+    fileprivate static func ensureInitialized() {
+        BackendLifecycle.lock.lock()
+        defer { BackendLifecycle.lock.unlock() }
+
+        guard !BackendLifecycle.isInitialized else { return }
+        BackendLifecycle.initialize()
+        BackendLifecycle.isInitialized = true
+    }
+
+    public static func shutdownBackend() {
+        BackendLifecycle.lock.lock()
+        defer { BackendLifecycle.lock.unlock() }
+
+        guard BackendLifecycle.isInitialized else { return }
+        BackendLifecycle.shutdown()
+        BackendLifecycle.isInitialized = false
+    }
+
+    static func setBackendHooksForTesting(
+        initialize: @escaping () -> Void,
+        shutdown: @escaping () -> Void,
+        isInitialized: Bool = false
+    ) {
+        BackendLifecycle.lock.lock()
+        defer { BackendLifecycle.lock.unlock() }
+
+        BackendLifecycle.initialize = initialize
+        BackendLifecycle.shutdown = shutdown
+        BackendLifecycle.isInitialized = isInitialized
+    }
+
+    static func resetBackendHooksForTesting() {
+        BackendLifecycle.lock.lock()
+        defer { BackendLifecycle.lock.unlock() }
+
+        BackendLifecycle.initialize = {
+            llama_backend_init()
+        }
+        BackendLifecycle.shutdown = {
+            llama_backend_free()
+        }
+        BackendLifecycle.isInitialized = false
     }
 
     static func silenceLogging() {
