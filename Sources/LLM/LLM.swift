@@ -1565,6 +1565,11 @@ open class LLM: ObservableObject {
         history.removeAll()
         Task { await core.resetContext() }
     }
+
+    private func resetContextIfHistoryIsEmpty() async {
+        guard history.isEmpty else { return }
+        await core.resetContext()
+    }
     
     open func recoverFromLengthy(_ input: borrowing String, to output: borrowing AsyncStream<String>.Continuation) {
         output.yield("TL;DR")
@@ -1575,6 +1580,8 @@ open class LLM: ObservableObject {
         
         isAvailable = false
         defer { isAvailable = true }
+
+        await resetContextIfHistoryIsEmpty()
         
         let response = await core.generateResponseStream(from: input)
         var output = ""
@@ -1591,6 +1598,8 @@ open class LLM: ObservableObject {
         
         isAvailable = false
         defer { isAvailable = true }
+
+        await resetContextIfHistoryIsEmpty()
         
         self.input = input
         let processedInput = preprocess(input, history, thinking)
@@ -1612,6 +1621,8 @@ open class LLM: ObservableObject {
         
         isAvailable = false
         defer { isAvailable = true }
+
+        await resetContextIfHistoryIsEmpty()
         
         self.input = input
         let processedInput = preprocess(input, history, thinking)
@@ -1665,6 +1676,8 @@ open class LLM: ObservableObject {
         as type: T.Type,
         thinking: ThinkingMode = .none
     ) async throws -> StructuredOutput<T> {
+        await resetContextIfHistoryIsEmpty()
+
         let schemaPrompt = """
         \(prompt)
         

@@ -7,13 +7,15 @@ final class LLMTests {
     let systemPrompt = "You are a human."
     let userPrompt = "Are you a human or an AI?"
     let history = [Chat(.user, "Hey."), Chat(.bot, "Hi.")]
+    let localQwenCleanupModelPath = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/GhostPepper/models/Qwen3-1.7B.Q4_K_M.gguf")
 
     deinit {
         LLM.resetBackendHooksForTesting()
     }
 
     @Test
-    func testBackendShutdownIsIdempotent() throws {
+    func testBackendShutdownIsIdempotent() async throws {
         var initializeCount = 0
         var shutdownCount = 0
 
@@ -22,11 +24,13 @@ final class LLMTests {
             shutdown: { shutdownCount += 1 }
         )
 
-        LLM.ensureInitialized()
-        LLM.ensureInitialized()
+        let firstBot = LLM(from: localQwenCleanupModelPath)
+        let secondBot = LLM(from: localQwenCleanupModelPath)
         LLM.shutdownBackend()
         LLM.shutdownBackend()
 
+        #expect(firstBot != nil)
+        #expect(secondBot != nil)
         #expect(initializeCount == 1)
         #expect(shutdownCount == 1)
     }
@@ -514,6 +518,51 @@ final class LLMTests {
         let thirdResponse = bot.output
         #expect(!thirdResponse.isEmpty)
         #expect(thirdResponse != "...")
+    }
+
+    @Test
+    func testClearingHistoryAllowsRepeatedStatelessQwenCleanupCalls() async throws {
+        guard FileManager.default.fileExists(atPath: localQwenCleanupModelPath.path) else { return }
+        let bot = try #require(LLM(from: localQwenCleanupModelPath))
+        let cleanupPrompt = """
+        Your job is to clean up transcribed audio. The audio transcription engine can make mistakes and will sometimes transcribe things in a way that is not how they should be written in text.
+
+        Repeat back EVERYTHING the user says. Your FIRM RULES are:
+        1. Delete filler words: um, uh, like, you know, basically, literally, sort of, kind of
+        2. ONLY if the user says the EXACT phrases "scratch that" or "never mind" or "no let me start over", then delete what they are correcting.
+        3. Otherwise keep the wording and meaning the same, but correct obvious recognition misses for names, models, commands, files, and jargon when supporting context clearly shows the intended term.
+        4. Use the context from the OCR window that is provided below to inform your transcription.
+        5. Use the other information you are provided about commonly mistranscribed words to inform your transcription.
+        6. Fix obvious grammatical errors.
+        7. ALWAYS APPEND THE WORD "DONE"
+
+        CRITICAL: Do NOT delete sentences. Do NOT remove context. Do NOT summarize. If you are unsure whether to keep or delete something, KEEP IT. Do not keep an obvious misrecognition just because it was spoken that way.
+
+        Input: "So um like the meeting is at 3pm you know on Tuesday"
+        Output: So the meeting is at 3pm on Tuesday
+
+        Input: "Okay so now I'm recording and it becomes a red recording thing. Do you think we could change the icon?"
+        Output: Okay so now I'm recording and it becomes a red recording thing. Do you think we could change the icon?
+
+        Input: "Hey Becca I have an email. Scratch that, this email is for Pete. Hey Pete, this is my email."
+        Output: Hey Pete, this is my email.
+
+        Input: "What is a synonym for whisper?"
+        Output: What is a synonym for whisper?
+
+        Input: "I've been working on this and I'm stuck. Any ideas?"
+        Output: I've been working on this and I'm stuck. Any ideas?
+        """
+        let input = "I think that some of this is ticket that came in over the weekend getting shuffled, but I'm not sure"
+
+        bot.useResolvedTemplate(systemPrompt: cleanupPrompt)
+
+        for _ in 1 ... 4 {
+            bot.history = []
+            await bot.respond(to: input, thinking: .suppressed)
+            #expect(!bot.output.isEmpty)
+            #expect(bot.output != "...")
+        }
     }
 
     //MARK: Generatable macro tests
