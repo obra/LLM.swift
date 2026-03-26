@@ -9,6 +9,8 @@ final class LLMTests {
     let history = [Chat(.user, "Hey."), Chat(.bot, "Hi.")]
     let localQwenCleanupModelPath = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/GhostPepper/models/Qwen3-1.7B.Q4_K_M.gguf")
+    let localQwen35HybridModelPath = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/GhostPepper/models/Qwen3.5-2B-Q4_K_M.gguf")
 
     deinit {
         LLM.resetBackendHooksForTesting()
@@ -560,6 +562,24 @@ final class LLMTests {
         for _ in 1 ... 4 {
             bot.history = []
             await bot.respond(to: input, thinking: .suppressed)
+            #expect(!bot.output.isEmpty)
+            #expect(bot.output != "...")
+        }
+    }
+
+    @Test
+    func testClearingHistoryAllowsRepeatedStatelessHybridQwenCleanupCalls() async throws {
+        guard FileManager.default.fileExists(atPath: localQwen35HybridModelPath.path) else { return }
+        let bot = try #require(LLM(from: localQwen35HybridModelPath))
+        let cleanupPrompt = """
+        Repeat back EVERYTHING the user says exactly.
+        """
+
+        bot.useResolvedTemplate(systemPrompt: cleanupPrompt)
+
+        for _ in 1 ... 3 {
+            bot.history = []
+            await bot.respond(to: "hello world", thinking: .suppressed)
             #expect(!bot.output.isEmpty)
             #expect(bot.output != "...")
         }

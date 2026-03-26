@@ -314,8 +314,12 @@ public actor LLMCore {
         currentTokenCount = 0
         tokenBuffer.removeAll()
         shouldContinuePredicting = false
-        // Clear all sequences to ensure clean state
-        llama_memory_seq_rm(llama_get_memory(context), -1, -1, -1)
+        let memory = llama_get_memory(context)
+        if llama_model_is_hybrid(model) || llama_model_is_recurrent(model) {
+            llama_memory_clear(memory, false)
+        } else {
+            llama_memory_seq_rm(memory, -1, -1, -1)
+        }
     }
     
     func generateResponseStream(from input: String, thinking: ThinkingMode = .none) -> AsyncStream<String> {
